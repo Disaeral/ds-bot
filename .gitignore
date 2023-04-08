@@ -1,0 +1,6 @@
+/node_modules
+/package-lock.json
+/recordings
+/benSoundEffects
+/dist
+index.html
