@@ -28,6 +28,7 @@ client.audioSubscription = null;
 client.audioQueue = [];
 client.isPlaying = false;
 client.timeoutId = null;
+client.hasIdleListener = false;
 
 client.on("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -89,7 +90,6 @@ client.on(Events.MessageCreate, async (msg) => {
       }
       console.log("checking if already playing", client.isPlaying);
       if (client.isPlaying) {
-        // this needs polishing - done
         console.log("already playing a song, adding to queue");
         client.audioQueue.push(singleSong);
         console.log("added, current queue:", client.audioQueue);
@@ -100,21 +100,11 @@ client.on(Events.MessageCreate, async (msg) => {
         console.log(client.audioQueue)
         await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
       }
+      if (!client.hasIdleListener) {
+        createIdleListener(client);
+      }
 
-      client.audioPlayer.on(AudioPlayerStatus.Idle, async () => {
-        console.log("queue on idle listener", client.audioQueue, "playback state isPlaying: ",client.isPlaying);
-        if (client.audioQueue.length > 0 && !client.isPlaying) {
-          console.log("idle status playing next song in q, current timestamp:", performance.now());
-          await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
-        } else if (client.audioSubscription) {
-          console.log("no more songs in queue, unsubscribing and destroying connection");
-          client.audioSubscription.unsubscribe();
-          client.audioConnection.destroy();
-          client.audioSubscription = null;
-          client.audioConnection = null;
-          client.audioPlayer = null;
-        }
-      });
+      
       break;
     case "skip": 
       console.log('got skip request, skipping...')
@@ -149,7 +139,7 @@ const playAudio = async (song, player) => {
   const resource = createAudioResource(stream.stream, {
     inputType: stream.type,
   });
-  player.play(resource);
+  await player.play(resource);
   client.isPlaying = true;
   console.log('after play', client.isPlaying);
   if (client.audioQueue.length > 0) {
@@ -194,3 +184,22 @@ const normalizeLinks = (str) => {
   });
   return res;
 };
+
+const createIdleListener = (client) => {
+  if (!client.audioPlayer || !client.audioSubscription) return;
+  client.audioPlayer.on(AudioPlayerStatus.Idle, async () => {
+    console.log("queue on idle listener", client.audioQueue, "playback state isPlaying: ",client.isPlaying);
+    if (client.audioQueue.length > 0 && !client.isPlaying) {
+      console.log("idle status playing next song in q, current timestamp:", performance.now());
+      await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
+    } else if (client.audioSubscription) {
+      console.log("no more songs in queue, unsubscribing and destroying connection");
+      client.audioSubscription.unsubscribe();
+      client.audioConnection.destroy();
+      client.audioSubscription = null;
+      client.audioConnection = null;
+      client.audioPlayer = null;
+    }
+  });
+  client.hasIdleListener = true;
+}
