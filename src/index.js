@@ -27,8 +27,9 @@ client.audioPlayer = null;
 client.audioSubscription = null;
 client.audioQueue = [];
 client.isPlaying = false;
-client.timeoutId = null;
 client.hasIdleListener = false;
+client.currentSong = null;
+client.loopAudio = false;
 
 client.on("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -36,24 +37,32 @@ client.on("ready", () => {
 
 client.on(Events.MessageCreate, async (msg) => {
   switch (msg.content) {
-    case msg.content.match(/https:\/\/www.youtube.com/)?.input:
+    case msg.content.match(/https:\/\/(www\.youtube\.com)|(youtu\.be)/)?.input:
       let singleSong = {};
-      if (([...msg.content.matchAll(/https:\/\/www.youtube.com/g)]).length > 1) {
+      if (
+        [...msg.content.matchAll(/https:\/\/(www\.youtube\.com)|(youtu\.be)/g)]
+          .length > 1
+      ) {
         // if got bundle of songs parse them and queue them
-        const links = await Promise.all(normalizeLinks(msg.content).map(async (link) => {
-          const { durationInSec } = (await play.video_basic_info(link))
-            .video_details;
-          console.log(client.audioQueue.length);
-          return { audioUrl: link, durationInSec }
-        }));
-        client.audioQueue.push(...links)
-        console.log(client.audioQueue, 'queue after links were mapped here');
+        const links = await Promise.all(
+          normalizeLinks(msg.content).map(async (link) => {
+            const { durationInSec } = (await play.video_basic_info(link))
+              .video_details;
+            console.log(client.audioQueue.length);
+            return { audioUrl: link, durationInSec };
+          })
+        );
+        client.audioQueue.push(...links);
+        console.log(client.audioQueue, "queue after links were mapped here");
       } else {
         const audioUrl = msg.content;
         const { durationInSec } = (await play.video_basic_info(audioUrl))
           .video_details;
         const song = { audioUrl, durationInSec };
-        singleSong = song
+        singleSong = song;
+        if (singleSong.audioUrl.match(/https:\/\/(youtu\.be)/g)) {
+          singleSong.audioUrl = remapYtBeLink(singleSong.audioUrl);
+        }
       }
       console.log("yt url recieved, getting video info...");
 
@@ -94,32 +103,44 @@ client.on(Events.MessageCreate, async (msg) => {
         client.audioQueue.push(singleSong);
         console.log("added, current queue:", client.audioQueue);
       } else if (singleSong.audioUrl) {
-        console.log("no queue or is not playing, playing recieved url:", singleSong.audioUrl);
+        console.log(
+          "no queue or is not playing, playing recieved url:",
+          singleSong.audioUrl
+        );
         await playAudio(singleSong, client.audioPlayer);
       } else {
-        console.log(client.audioQueue)
+        console.log(client.audioQueue);
         await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
       }
       if (!client.hasIdleListener) {
         createIdleListener(client);
       }
-
-      
       break;
-    case "skip": 
-      console.log('got skip request, skipping...')
+    case "stop":
+      console.log("got stop request, aborting...");
       if (client.audioSubscription) {
-        console.log(
-          "unsubscribing and destroying connection"
-        );
+        console.log("unsubscribing and destroying connection");
         client.audioSubscription.unsubscribe();
         client.audioConnection.destroy();
         client.audioSubscription = null;
         client.audioConnection = null;
         client.audioPlayer = null;
       } else {
-        console.log('no subscription, aborting...')
+        console.log("no subscription, aborting...");
       }
+      break;
+    case "loop":
+      console.log("got loop command, repeating current song...")
+      msg.reply("пока не сделал :Р")
+      client.loopAudio = true;
+      // create new event listener in place of old one where one song repeats
+      break;
+    case "stopLoop":
+      console.log("stopping current loop...");
+      client.loopAudio = false
+      msg.reply("пока не сделал :Р")
+      // create event listener of old format with queue active
+      break;
     default:
       console.log("non yt url message recieved:", msg.content);
   }
@@ -132,29 +153,19 @@ client.on(Events.Error, (e) => {
 client.login(token);
 
 const playAudio = async (song, player) => {
-  if (client.isPlaying) return
-  const { audioUrl, durationInSec } = song;
-  console.trace("play call");
+  const { audioUrl } = song;
+  console.trace("play call, url:");
   const stream = await play.stream(audioUrl);
   const resource = createAudioResource(stream.stream, {
     inputType: stream.type,
   });
   await player.play(resource);
+  client.currentSong = audioUrl;
   client.isPlaying = true;
-  console.log('after play', client.isPlaying);
+  console.log("after play", client.isPlaying);
   if (client.audioQueue.length > 0) {
     client.audioQueue.shift();
   }
-  if (client.timeoutId) {
-    clearTimeout(client.timeoutId)
-  }
-  return new Promise((resolve, reject) => {
-    client.timeoutId = setTimeout(() => {
-      client.isPlaying = false
-      console.trace('playback over in setTimeout, timestamp:', performance.now())
-      resolve();
-    }, durationInSec*1000)
-  })
 };
 
 const getNextInQ = (q) => {
@@ -169,31 +180,47 @@ const getNextInQ = (q) => {
 
 const normalizeLinks = (str) => {
   const regexp = /https?:\/\/(?:www\.)?youtube\.com\/watch\?v=/g;
+  const regexp2 = /https:\/\/(youtu\.be)/g;
+  const rightRegexp = [...str.matchAll(regexp)].length ? regexp : regexp2;
   str.replaceAll(" ", "");
-  const a = str.matchAll(regexp);
-
+  const a = str.matchAll(rightRegexp); // spread operator mutates iterable variable, so dont do ...a
   const indexes = [];
   const res = [];
-
   for (const match of a) {
     indexes.push(match.index);
   }
-
   indexes.forEach((index, ii) => {
     res.push(str.slice(index, indexes[ii + 1]));
   });
+  if ([...str.matchAll(regexp2)].length) {
+    return res.map((link) => remapYtBeLink(link));
+  }
   return res;
 };
+
+const remapYtBeLink = (ytBeLink) =>
+  "https://www.youtube.com/watch?v=" +
+  ytBeLink.slice(ytBeLink.lastIndexOf("/") + 1);
 
 const createIdleListener = (client) => {
   if (!client.audioPlayer || !client.audioSubscription) return;
   client.audioPlayer.on(AudioPlayerStatus.Idle, async () => {
-    console.log("queue on idle listener", client.audioQueue, "playback state isPlaying: ",client.isPlaying);
-    if (client.audioQueue.length > 0 && !client.isPlaying) {
-      console.log("idle status playing next song in q, current timestamp:", performance.now());
+    console.log(
+      "queue on idle listener",
+      client.audioQueue,
+      "playback state isPlaying: ",
+      client.isPlaying
+    );
+    if (client.audioQueue.length > 0) {
+      console.log(
+        "idle status playing next song in q, current timestamp:",
+        performance.now()
+      );
       await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
     } else if (client.audioSubscription) {
-      console.log("no more songs in queue, unsubscribing and destroying connection");
+      console.log(
+        "no more songs in queue, unsubscribing and destroying connection"
+      );
       client.audioSubscription.unsubscribe();
       client.audioConnection.destroy();
       client.audioSubscription = null;
@@ -202,4 +229,4 @@ const createIdleListener = (client) => {
     }
   });
   client.hasIdleListener = true;
-}
+};
