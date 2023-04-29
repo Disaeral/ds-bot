@@ -116,29 +116,28 @@ client.on(Events.MessageCreate, async (msg) => {
         createIdleListener(client);
       }
       break;
-    case "stop":
-      console.log("got stop request, aborting...");
-      if (client.audioSubscription) {
-        console.log("unsubscribing and destroying connection");
-        client.audioSubscription.unsubscribe();
-        client.audioConnection.destroy();
-        client.audioSubscription = null;
-        client.audioConnection = null;
-        client.audioPlayer = null;
+    case "skip":
+      if (client.audioQueue) {
+        await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
       } else {
-        console.log("no subscription, aborting...");
+        console.log("nothing to skip stopping");
+        disconnectClient(client);
       }
       break;
+    case "stop":
+      console.log("got stop request, aborting...");
+      disconnectClient(client);
+      break;
     case "loop":
-      console.log("got loop command, repeating current song...")
-      msg.reply("пока не сделал :Р")
+      console.log("got loop command, repeating current song...");
+      msg.reply("пока не сделал :Р");
       client.loopAudio = true;
       // create new event listener in place of old one where one song repeats
       break;
     case "stopLoop":
       console.log("stopping current loop...");
-      client.loopAudio = false
-      msg.reply("пока не сделал :Р")
+      client.loopAudio = false;
+      msg.reply("пока не сделал :Р");
       // create event listener of old format with queue active
       break;
     default:
@@ -153,7 +152,7 @@ client.on(Events.Error, (e) => {
 client.login(token);
 
 const playAudio = async (song, player) => {
-  const { audioUrl } = song;
+  const { audioUrl, durationInSec } = song;
   console.trace("play call, url:");
   const stream = await play.stream(audioUrl);
   const resource = createAudioResource(stream.stream, {
@@ -166,6 +165,14 @@ const playAudio = async (song, player) => {
   if (client.audioQueue.length > 0) {
     client.audioQueue.shift();
   }
+  return new Promise((resolve) => {
+    console.log("promise return timestamp", performance.now());
+    setTimeout(() => {
+      client.isPlaying = false;
+      resolve();
+      console.log("promise resolved timestamp", performance.now());
+    }, durationInSec * 1000);
+  });
 };
 
 const getNextInQ = (q) => {
@@ -202,15 +209,10 @@ const remapYtBeLink = (ytBeLink) =>
   "https://www.youtube.com/watch?v=" +
   ytBeLink.slice(ytBeLink.lastIndexOf("/") + 1);
 
-const createIdleListener = (client) => {
+const createIdleListener = (client, options) => {
   if (!client.audioPlayer || !client.audioSubscription) return;
   client.audioPlayer.on(AudioPlayerStatus.Idle, async () => {
-    console.log(
-      "queue on idle listener",
-      client.audioQueue,
-      "playback state isPlaying: ",
-      client.isPlaying
-    );
+    console.log("queue on idle listener", client.audioQueue);
     if (client.audioQueue.length > 0) {
       console.log(
         "idle status playing next song in q, current timestamp:",
@@ -221,6 +223,9 @@ const createIdleListener = (client) => {
       console.log(
         "no more songs in queue, unsubscribing and destroying connection"
       );
+      client.hasIdleListener = false;
+      client.isPlaying = false;
+      client.audioQueue = [];
       client.audioSubscription.unsubscribe();
       client.audioConnection.destroy();
       client.audioSubscription = null;
@@ -229,4 +234,17 @@ const createIdleListener = (client) => {
     }
   });
   client.hasIdleListener = true;
+};
+
+const disconnectClient = (client) => {
+  if (client.audioSubscription && client.audioConnection) {
+    client.hasIdleListener = false;
+    client.isPlaying = false;
+    client.audioQueue = [];
+    client.audioSubscription.unsubscribe();
+    client.audioConnection.destroy();
+    client.audioSubscription = null;
+    client.audioConnection = null;
+    client.audioPlayer = null;
+  }
 };
