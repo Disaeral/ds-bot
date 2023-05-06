@@ -9,7 +9,7 @@ const { joinVoiceChannel } = require("@discordjs/voice");
 const { exec } = require("youtube-dl-exec");
 const play = require("play-dl");
 
-const { token } = require("../config.json");
+const { token } = require("./config.json");
 
 const client = new Client({
   intents: [
@@ -117,7 +117,7 @@ client.on(Events.MessageCreate, async (msg) => {
       }
       break;
     case "skip":
-      if (client.audioQueue) {
+      if (client.audioQueue.length) {
         await playAudio(getNextInQ(client.audioQueue), client.audioPlayer);
       } else {
         console.log("nothing to skip stopping");
@@ -151,7 +151,7 @@ client.on(Events.Error, (e) => {
 // // Login to Discord with your client's token
 client.login(token);
 
-const playAudio = async (song, player) => {
+const playAudio = async (song, player) => { 
   const { audioUrl, durationInSec } = song;
   console.trace("play call, url:");
   const stream = await play.stream(audioUrl);
@@ -209,7 +209,7 @@ const remapYtBeLink = (ytBeLink) =>
   "https://www.youtube.com/watch?v=" +
   ytBeLink.slice(ytBeLink.lastIndexOf("/") + 1);
 
-const createIdleListener = (client, options) => {
+const createIdleListener = (client) => {
   if (!client.audioPlayer || !client.audioSubscription) return;
   client.audioPlayer.on(AudioPlayerStatus.Idle, async () => {
     console.log("queue on idle listener", client.audioQueue);
@@ -223,14 +223,7 @@ const createIdleListener = (client, options) => {
       console.log(
         "no more songs in queue, unsubscribing and destroying connection"
       );
-      client.hasIdleListener = false;
-      client.isPlaying = false;
-      client.audioQueue = [];
-      client.audioSubscription.unsubscribe();
-      client.audioConnection.destroy();
-      client.audioSubscription = null;
-      client.audioConnection = null;
-      client.audioPlayer = null;
+      disconnectClient(client);
     }
   });
   client.hasIdleListener = true;
